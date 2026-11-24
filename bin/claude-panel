@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# Standalone launcher & IPC controller for Claude Panel (Wayland wlr-layer-shell).
+# Usage:
+#   claude-panel [toggle|open|close|daemon|stop|status] [--cwd DIR] [--screen NAME]
+set -euo pipefail
+
+SELF="$(realpath "$0")"
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+SHELL_QML="$ROOT/qml/shell.qml"
+RUN_DIR="${CLAUDE_PANEL_RUN:-${XDG_RUNTIME_DIR:-/run/user/$UID}/claude-panel}"
+LOG_FILE="$RUN_DIR/panel.log"
+
+mkdir -p "$RUN_DIR"
+chmod 700 "$RUN_DIR"
+
+CMD="toggle"
+CWD_ARG=""
+SCREEN_ARG=""
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        toggle|open|close|daemon|stop|status|help|-h|--help)
+            CMD="$1"
+            shift
+            ;;
+        --cwd)
+            CWD_ARG="${2:-}"
+            shift 2
+            ;;
+        --screen)
+            SCREEN_ARG="${2:-}"
+            shift 2
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            echo "Usage: claude-panel [toggle|open|close|daemon|stop|status] [--cwd DIR] [--screen NAME]" >&2
+            exit 2
+            ;;
+    esac
+done
+
+if [ "$CMD" = "help" ] || [ "$CMD" = "-h" ] || [ "$CMD" = "--help" ]; then
+    cat <<'EOF'
+Claude Panel - Standalone Wayland overlay for Claude Code
+
+Usage:
+  claude-panel [toggle] [--cwd DIR] [--screen NAME]   Start or fold/unfold the panel
+  claude-panel open [--cwd DIR] [--screen NAME]       Open or unfold the panel
+  claude-panel close                                  Close the panel (keeps daemon alive)
+  claude-panel daemon [--cwd DIR]                     Start idle daemon (for compositor autostart)
+  claude-panel stop                                   Stop the background daemon
+  claude-panel status                                 Show whether the daemon is running
+
+Environment:
+  CLAUDE_PANEL_CWD      Default starting directory for Claude sessions (default: $HOME)
+  CLAUDE_PANEL_RUN      Runtime state directory (default: $XDG_RUNTIME_DIR/claude-panel)
+  CLAUDE_PANEL_MUTE     Set to 1 to mute UI sound effects
+  CLAUDE_PANEL_VOLUME   SFX volume multiplier (0.0 to 1.5, default: 1.0)
+EOF
+    exit 0
+fi
+
+if ! command -v quickshell >/dev/null 2>&1; then
+    echo "claude-panel: 'quickshell' not found in PATH." >&2
+    exit 1
+fi
+
+is_running() {
+    quickshell ipc -p "$SHELL_QML" show >/dev/null 2>&1
+}
+
+detect_focused_screen() {
+    if [ -n "$SCREEN_ARG" ]; then
+        printf '%s' "$SCREEN_ARG"
+        return 0
+    fi
+    # Hyprland
+    if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && command -v hyprctl >/dev/null 2>&1; then
+        python3 - <<'PY' 2>/dev/null && return 0 || true
+import json, subprocess, sys
+out = subprocess.check_output(["hyprctl", "monitors", "-j"], timeout=1.0)
+for m in json.loads(out):
+    if m.get("focused"):
+        sys.stdout.write(m.get("name", ""))
+        sys.exit(0)
+sys.exit(1)
+PY
+    fi
+    # Niri
+    if [ -n "${NIRI_SOCKET:-}" ] && command -v niri >/dev/null 2>&1; then
+        python3 - <<'PY' 2>/dev/null && return 0 || true
+import json, subprocess, sys
+out = subprocess.check_output(["niri", "msg", "-j", "focused-output"], timeout=1.0)
+name = (json.loads(out) or {}).get("name", "")
+if name:
+    sys.stdout.write(name)
+    sys.exit(0)
+sys.exit(1)
+PY
+    fi
+    # Sway
+    if [ -n "${SWAYSOCK:-}" ] && command -v swaymsg >/dev/null 2>&1; then
+        python3 - <<'PY' 2>/dev/null && return 0 || true
+import json, subprocess, sys
+out = subprocess.check_output(["swaymsg", "-t", "get_outputs"], timeout=1.0)
+for o in json.loads(out):
+    if o.get("focused"):
+        sys.stdout.write(o.get("name", ""))
+        sys.exit(0)
+sys.exit(1)
+PY
+    fi
+    printf ''
+}
+
+start_daemon() {
+    local auto_open="$1"
+    local screen="$2"
+    export CLAUDE_PANEL_ROOT="$ROOT"
+    export CLAUDE_PANEL_RUN="$RUN_DIR"
+    export CLAUDE_PANEL_AUTO_OPEN="$auto_open"
+    export CLAUDE_PANEL_SCREEN="$screen"
+    export COLORSCHEMES_DIR="$ROOT/qml/color-schemes"
+    if [ -n "$CWD_ARG" ]; then
+        export CLAUDE_PANEL_CWD="$CWD_ARG"
+    fi
+    nohup quickshell -n -p "$SHELL_QML" > "$LOG_FILE" 2>&1 < /dev/null &
+}
+
+case "$CMD" in
+    status)
+        if is_running; then
+            echo "claude-panel is running"
+            exit 0
+        else
+            echo "claude-panel is not running"
+            exit 1
+        fi
+        ;;
+    stop)
+        if is_running; then
+            quickshell ipc -p "$SHELL_QML" call claude quit >/dev/null 2>&1 || true
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+                is_running || break
+                sleep 0.1
+            done
+            rm -f "$RUN_DIR/panel-rect"
+            echo "claude-panel stopped"
+        else
+            rm -f "$RUN_DIR/panel-rect"
+            echo "claude-panel is not running"
+        fi
+        ;;
+    daemon)
+        if is_running; then
+            echo "claude-panel daemon already running"
+            exit 0
+        fi
+        start_daemon "0" ""
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            is_running && break
+            sleep 0.1
+        done
+        if is_running; then
+            echo "claude-panel daemon started"
+        else
+            echo "claude-panel daemon failed to start (see $LOG_FILE)" >&2
+            exit 1
+        fi
+        ;;
+    open|toggle)
+        screen="$(detect_focused_screen)"
+        if is_running; then
+            quickshell ipc -p "$SHELL_QML" call claude "$CMD" "$screen"
+        else
+            start_daemon "1" "$screen"
+        fi
+        ;;
+    close)
+        if is_running; then
+            quickshell ipc -p "$SHELL_QML" call claude close
+        fi
+        ;;
+esac
