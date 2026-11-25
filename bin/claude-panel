@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Standalone launcher & IPC controller for Claude Panel (Wayland wlr-layer-shell).
 # Usage:
-#   claude-panel [toggle|open|close|daemon|stop|status] [--cwd DIR] [--screen NAME]
+#   claude-panel [toggle|open|close|daemon|restart|stop|status|update|-up|version] [--cwd DIR] [--screen NAME]
 set -euo pipefail
 
 SELF="$(realpath "$0")"
@@ -16,11 +16,21 @@ chmod 700 "$RUN_DIR"
 CMD="toggle"
 CWD_ARG=""
 SCREEN_ARG=""
+APPLY_MODE="0"
+OPEN_AFTER="0"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        toggle|open|close|daemon|stop|status|help|-h|--help)
+        toggle|open|close|daemon|restart|stop|status|update|-up|version|-V|--version|-ver|help|-h|--help)
             CMD="$1"
+            shift
+            ;;
+        --apply)
+            APPLY_MODE="1"
+            shift
+            ;;
+        --open)
+            OPEN_AFTER="1"
             shift
             ;;
         --cwd)
@@ -33,11 +43,24 @@ while [ "$#" -gt 0 ]; do
             ;;
         *)
             echo "Unknown argument: $1" >&2
-            echo "Usage: claude-panel [toggle|open|close|daemon|stop|status] [--cwd DIR] [--screen NAME]" >&2
+            echo "Usage: claude-panel [toggle|open|close|daemon|restart|stop|status|update|-up|version] [--cwd DIR] [--screen NAME]" >&2
             exit 2
             ;;
     esac
 done
+
+read_version() {
+    if [ -f "$ROOT/version.txt" ]; then
+        tr -d '\r\n' < "$ROOT/version.txt"
+    else
+        printf '0.0.0'
+    fi
+}
+
+if [ "$CMD" = "version" ] || [ "$CMD" = "-V" ] || [ "$CMD" = "--version" ] || [ "$CMD" = "-ver" ]; then
+    printf 'Claude Panel v%s\n' "$(read_version)"
+    exit 0
+fi
 
 if [ "$CMD" = "help" ] || [ "$CMD" = "-h" ] || [ "$CMD" = "--help" ]; then
     cat <<'EOF'
@@ -48,8 +71,11 @@ Usage:
   claude-panel open [--cwd DIR] [--screen NAME]       Open or unfold the panel
   claude-panel close                                  Close the panel (keeps daemon alive)
   claude-panel daemon [--cwd DIR]                     Start idle daemon (for compositor autostart)
+  claude-panel restart [--open]                       Restart the background daemon
   claude-panel stop                                   Stop the background daemon
   claude-panel status                                 Show whether the daemon is running
+  claude-panel update | -up                           Update Claude Panel from GitHub
+  claude-panel version | -V                           Show installed version
 
 Environment:
   CLAUDE_PANEL_CWD      Default starting directory for Claude sessions (default: $HOME)
@@ -60,14 +86,63 @@ EOF
     exit 0
 fi
 
+is_running() {
+    command -v quickshell >/dev/null 2>&1 && quickshell ipc -p "$SHELL_QML" show >/dev/null 2>&1
+}
+
+if [ "$CMD" = "update" ] || [ "$CMD" = "-up" ]; then
+    if ! command -v git >/dev/null 2>&1; then
+        echo "git is not installed; cannot update automatically." >&2
+        exit 1
+    fi
+    if [ ! -d "$ROOT/.git" ]; then
+        echo "$ROOT is not a git checkout; reinstall via git clone." >&2
+        exit 1
+    fi
+    if ! git -C "$ROOT" diff --quiet HEAD --; then
+        echo "Local changes found in $ROOT; nothing was updated." >&2
+        exit 1
+    fi
+    if ! git -C "$ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+        echo "Current branch does not track a remote branch; nothing was updated." >&2
+        exit 1
+    fi
+
+    before="$(read_version)"
+    old_head="$(git -C "$ROOT" rev-parse HEAD)"
+    if ! git -C "$ROOT" pull --ff-only --quiet; then
+        echo "Could not fast-forward update (offline or diverged history)." >&2
+        exit 1
+    fi
+    chmod +x "$ROOT/bin/claude-panel" "$ROOT/scripts/launch.sh" "$ROOT/scripts/bridge.py" 2>/dev/null || true
+
+    if [ "$(git -C "$ROOT" rev-parse HEAD)" = "$old_head" ]; then
+        echo "Claude Panel v${before} is already up to date."
+        exit 0
+    fi
+
+    after="$(read_version)"
+    echo "Updated Claude Panel v${before} -> v${after}"
+
+    if [ "$APPLY_MODE" != "1" ] && is_running; then
+        if [ -t 0 ]; then
+            read -r -p "Claude Panel daemon is running (restarting ends any active session). Restart now? [y/N] " reply || reply=""
+            if [[ "$reply" =~ ^[Yy]$ ]]; then
+                "$SELF" restart
+            else
+                echo "Run 'claude-panel restart' when ready to use v${after}."
+            fi
+        else
+            echo "Run 'claude-panel restart' when ready to use v${after}."
+        fi
+    fi
+    exit 0
+fi
+
 if ! command -v quickshell >/dev/null 2>&1; then
     echo "claude-panel: 'quickshell' not found in PATH." >&2
     exit 1
 fi
-
-is_running() {
-    quickshell ipc -p "$SHELL_QML" show >/dev/null 2>&1
-}
 
 detect_focused_screen() {
     if [ -n "$SCREEN_ARG" ]; then
@@ -166,6 +241,32 @@ case "$CMD" in
         else
             echo "claude-panel daemon failed to start (see $LOG_FILE)" >&2
             exit 1
+        fi
+        ;;
+    restart)
+        if is_running; then
+            quickshell ipc -p "$SHELL_QML" call claude quit >/dev/null 2>&1 || true
+            for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+                is_running || break
+                sleep 0.1
+            done
+        fi
+        rm -f "$RUN_DIR/panel-rect"
+        if [ "$OPEN_AFTER" = "1" ]; then
+            screen="$(detect_focused_screen)"
+            start_daemon "1" "$screen"
+        else
+            start_daemon "0" ""
+            for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+                is_running && break
+                sleep 0.1
+            done
+            if is_running; then
+                echo "claude-panel daemon restarted"
+            else
+                echo "claude-panel daemon failed to restart (see $LOG_FILE)" >&2
+                exit 1
+            fi
         fi
         ;;
     open|toggle)

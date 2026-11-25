@@ -10,6 +10,7 @@ It wraps a real `claude` CLI session inside an animated layer-shell overlay with
 - **Foldable corner dome** — press your toggle keybind to tuck the active session into the corner while Claude keeps working (Clawd animates while typing or waiting for attention)
 - **Real Claude Code terminal** embedded via `qmltermwidget`, paired with a lightweight Python hook/status bridge (`scripts/bridge.py`) without modifying your `~/.claude/settings.json`
 - **Studio rail** — live edited files & diffs, pinned/searchable slash commands, recent session resume, model & effort selector, context meter, and task checklist
+- **Auto update check** — checks GitHub every 6 hours, notifies once per new version, and updates in place from Settings → Updates or via `claude-panel update`
 - **Optional UI sound effects** via `pw-play` (silently skipped if unavailable or muted)
 
 ## Compatibility
@@ -91,9 +92,12 @@ claude-panel
 claude-panel toggle [--cwd /path/to/project] [--screen DP-1]
 claude-panel open [--cwd /path/to/project]
 claude-panel close
-claude-panel daemon    # Start idle background daemon (good for autostart)
-claude-panel stop      # Stop the background daemon
+claude-panel daemon     # Start idle background daemon (good for autostart)
+claude-panel restart    # Restart the background daemon
+claude-panel stop       # Stop the background daemon
 claude-panel status
+claude-panel update     # Update Claude Panel from GitHub (alias: -up)
+claude-panel version    # Show installed version (alias: -V)
 ```
 
 Or run directly with Quickshell:
@@ -101,6 +105,22 @@ Or run directly with Quickshell:
 ```bash
 quickshell -p ~/.local/share/claude-panel/qml/shell.qml
 ```
+
+## Updating
+
+Claude Panel checks GitHub automatically 1 minute after startup and then every **6 hours** (notifying once per new version via `notify-send`, if installed).
+
+You can update in two ways:
+- **Inside the panel:** Open **Settings (`⚙`)** in the left rail → **Updates** → click **Update** (pulls in the background without opening a terminal), then **Restart panel** when ready.
+- **From your terminal:**
+
+```bash
+claude-panel update
+# or
+claude-panel -up
+```
+
+Your preferences (`~/.local/state/claude-panel/prefs.json`) and audio config (`~/.config/claude-panel/config.json`) are never touched.
 
 ## Compositor Keybinds
 

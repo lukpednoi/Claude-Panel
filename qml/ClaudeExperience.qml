@@ -21,6 +21,7 @@ Item {
     property bool still: false
     // the live session: sign-in, running/idle and everything the Studio shows come from the store
     readonly property alias store: claudeStore
+    property var updater: null
     property bool loggedIn: claudeStore.loggedIn
     property bool agentRunning: claudeStore.agentRunning
     property string greetingMode: "auto"
@@ -397,6 +398,7 @@ Item {
                         anchors.fill: parent
                         visible: stage.loggedIn
                         store: claudeStore
+                        updater: stage.updater
                         // the session boots during the welcome, once sign-in is known
                         terminalAutoStart: claudeStore.authChecked && stage.loggedIn
                         stageWidth: stage.cardW

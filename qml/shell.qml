@@ -61,11 +61,14 @@ ShellRoot {
         function onReloadFailed(errorString) { Quickshell.inhibitReloadPopup(); }
     }
 
+    ClaudeUpdater { id: updater }
+
     IpcHandler {
         target: "claude"
         function toggle(screenName: string): void { root.togglePanel(screenName); }
         function open(screenName: string): void { root.openPanel(screenName); }
         function close(): void { root.closePanel(); }
+        function checkUpdate(): void { updater.check(true); }
         function quit(): void {
             if (root.shown && root.overlay) root.overlay.experience.store.stopSession();
             Qt.quit();
@@ -76,6 +79,7 @@ ShellRoot {
         active: root.shown
         sourceComponent: ClaudeWelcomeOverlay {
             controller: root
+            updater: updater
             targetScreen: root.targetScreen
             onFinished: root.closed()
         }

@@ -21,6 +21,7 @@ Item {
     property string activeSection: "files" // "files" | "commands" | "sessions" | "settings"
 
     required property var store              // ClaudeStore (live) — StudioMockData has the same shape for previews
+    property var updater: null               // ClaudeUpdater (optional — standalone panel self-updater)
     property bool terminalAutoStart: false
     property string statusToast: ""
     property var openTabIds: []
@@ -168,6 +169,23 @@ Item {
                                     }
                                 }
 
+                                // Orange dot on Settings when a panel update is available or waiting for restart
+                                Rectangle {
+                                    visible: actBtn.modelData.id === "settings"
+                                        && studio.updater !== null
+                                        && (studio.updater.updateAvailable || studio.updater.restartNeeded)
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.rightMargin: 6
+                                    anchors.topMargin: 6
+                                    width: 7
+                                    height: 7
+                                    radius: 3.5
+                                    color: studio.updater && studio.updater.restartNeeded ? "#7DD18A" : "#E2774A"
+                                    border.width: 1
+                                    border.color: "#100D0B"
+                                }
+
                                 MouseArea {
                                     id: actMa
                                     anchors.fill: parent
@@ -255,6 +273,7 @@ Item {
                             anchors.fill: parent
                             visible: studio.activeSection === "settings"
                             store: studio.store
+                            updater: studio.updater
                         }
                     }
                 }

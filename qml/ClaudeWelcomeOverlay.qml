@@ -16,6 +16,7 @@ PanelWindow {
     signal finished()
     // set by the shell controller so toggle keybinds can fold and unfold it
     property var controller: null
+    property var updater: null
     Component.onCompleted: {
         if (controller) controller.overlay = win;
         Quickshell.execDetached(["mkdir", "-p", experience.store.runDir]);
@@ -58,6 +59,7 @@ PanelWindow {
         startHoleR: win.startHoleR
         shaderUrl: sfx.shaderUrl
         showCloseButton: true
+        updater: win.updater
         onSfxRequested: function(file, vol) { sfx.play(file, vol) }
         onFinished: win.finished()
     }
